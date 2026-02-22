@@ -1,7 +1,44 @@
 function doPost(e) {
+  // 🔴デバッグ用: どんなリクエストが来ても、まず一番最初に生データを保存する
+  try {
+    const rawDoc = DocumentApp.create('【受信ログ】Dify生データ_' + new Date().getTime());
+    const rawBody = rawDoc.getBody();
+    rawBody.appendParagraph('リクエスト受信時刻: ' + new Date().toLocaleString());
+    rawBody.appendParagraph('◆ イベントオブジェクト(文字列化):');
+    rawBody.appendParagraph(JSON.stringify(e || {}));
+    if (e && e.postData) {
+      rawBody.appendParagraph('◆ postData.contents:');
+      rawBody.appendParagraph(e.postData.contents || 'No contents');
+      rawBody.appendParagraph('◆ postData.type (MIME):');
+      rawBody.appendParagraph(e.postData.type || 'No type');
+    }
+    rawDoc.saveAndClose();
+  } catch(e3) {
+    // ログ作成自体が失敗した場合は無視
+  }
+
   // 1. JSONデータをパース
-  const jsonString = e.postData.contents;
-  const data = JSON.parse(jsonString);
+  let jsonString = '';
+  let data = {};
+  
+  try {
+    jsonString = e.postData.contents;
+    data = JSON.parse(jsonString);
+  } catch (parseError) {
+    // 🔴デバッグ用: JSONパースに失敗した場合、生の文字列をGoogle Docにログとして残す
+    try {
+      const errDoc = DocumentApp.create('【エラーログ】Dify送信データ');
+      const errBody = errDoc.getBody();
+      errBody.appendParagraph('JSONパースエラー発生: ' + new Date().toLocaleString());
+      errBody.appendParagraph('▼受信した生データ:');
+      errBody.appendParagraph(jsonString || 'データなし');
+      errBody.appendParagraph('▼エラー内容:');
+      errBody.appendParagraph(parseError.toString());
+      errDoc.saveAndClose();
+    } catch(e2) {}
+    
+    return createResponse(400, "Invalid JSON format: " + parseError.toString());
+  }
   
   // 2. プロパティ取得
   const props = PropertiesService.getScriptProperties();
@@ -25,6 +62,10 @@ function doPost(e) {
     
   } else if (data.action === 'delete') {
     return handleDelete(data, WP_SITE_URL, authHeader, POST_TYPE);
+    
+  } else if (data.action === 'create_doc' || (!data.action && data.title)) {
+    // ★追加: アクション未指定でも title があればドキュメント作成とみなす (Dify互換)
+    return handleCreateDoc(data);
     
   } else {
     return createResponse(400, "Invalid Action");
@@ -279,8 +320,15 @@ function handleDelete(data, siteUrl, auth, postType) {
   // （もしDifyがDocsのURLも出力していてフロントでパースできた場合）
   if (data.docUrl) {
     try {
-      const docMatch = data.docUrl.match(/\/d\/(.*?)\//);
-      const docId = docMatch ? docMatch[1] : null;
+      let docId = null;
+      let docMatch = data.docUrl.match(/\/d\/(.*?)\//);
+      if (docMatch) {
+         docId = docMatch[1];
+      } else {
+         docMatch = data.docUrl.match(/open\?id=([a-zA-Z0-9_-]+)/);
+         if (docMatch) docId = docMatch[1];
+      }
+      
       if (docId) {
         DriveApp.getFileById(docId).setTrashed(true);
         docDeleted = true;
@@ -299,7 +347,13 @@ function handleDelete(data, siteUrl, auth, postType) {
 
 function convertMarkdownToHtml(markdown) {
   if (!markdown) return "";
-  const lines = markdown.split('\n');
+  
+  // ★追加：Difyが生成途中でぶった切った不正な画像タグ等を無害化する
+  // 例: <img src="<br" /> となってしまったものを安全な形式に置換または削除
+  let safeMarkdown = markdown.replace(/<img[^>]*?<br[^>]*>/gi, ''); // 途中で<br>が混じった崩壊タグを削除
+  safeMarkdown = safeMarkdown.replace(/<img[^>]*$/i, ''); // 閉じられていない <img> タグが末尾にあれば削除
+  
+  const lines = safeMarkdown.split('\n');
   let html = '';
   let inList = false;
 
@@ -652,3 +706,56 @@ function deleteOldFilesInFolder() {
   }
 }
 
+// ==========================================
+// F. Google Docs 作成機能 (Dify連携)
+// ==========================================
+const DESTINATION_FOLDER_ID = '1tQU3-ts3mU6YusLFjijNDNGzdcf-y-GS';
+
+function handleCreateDoc(data) {
+  try {
+    log('POSTリクエスト(create_doc)を受信しました');
+    const title = data.title || 'Untitled Document';
+    
+    // 1. 新しいGoogle Docsを作成
+    const doc = DocumentApp.create(title);
+    const docId = doc.getId();
+
+    // 2. 指定した固定フォルダへ移動する処理
+    try {
+      const file = DriveApp.getFileById(docId); // DriveAppでファイルとして操作
+      const folder = DriveApp.getFolderById(DESTINATION_FOLDER_ID); // 移動先フォルダ
+      file.moveTo(folder); // 移動実行
+      log('固定フォルダへ移動しました: ' + DESTINATION_FOLDER_ID);
+    } catch (folderError) {
+      log('フォルダ移動に失敗しました（ルートに残ります）: ' + folderError.toString());
+    }
+    
+    // 3. ドキュメントの本文編集
+    const body = doc.getBody();
+    body.appendParagraph(title).setHeading(DocumentApp.ParagraphHeading.HEADING1);
+    body.appendParagraph('作成日時: ' + new Date().toLocaleString()).setHeading(DocumentApp.ParagraphHeading.NORMAL);
+    
+    if (data.content) {
+      body.appendParagraph(data.content).setHeading(DocumentApp.ParagraphHeading.NORMAL);
+    }
+    
+    doc.saveAndClose();
+    const docUrl = doc.getUrl();
+    log('ドキュメント作成完了 - URL: ' + docUrl);
+    
+    // Difyがパースできるよう、既存のレスポンス形式を維持する（createResponseを使わない）
+    return ContentService.createTextOutput(JSON.stringify({
+      status: 'success',
+      message: 'ドキュメントが作成されました',
+      documentUrl: docUrl,
+      title: title
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    log('エラーが発生しました: ' + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      status: 'error',
+      message: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}

@@ -1,0 +1,6 @@
+# Ignore all files by default
+**/**
+
+# Only include the specific GAS script
+!Code.gs
+!appsscript.json

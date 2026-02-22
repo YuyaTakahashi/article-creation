@@ -1,8 +1,9 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { PenTool, History, BookOpen } from "lucide-react";
+import { PenTool, History } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function Sidebar() {
@@ -26,9 +27,9 @@ export function Sidebar() {
     return (
         <div className="flex h-full w-64 flex-col glass border-r">
             <div className="flex h-16 items-center px-6 border-b border-[rgba(255,255,255,0.1)]">
-                <Link href="/" className="flex items-center gap-2">
-                    <div className="bg-gradient-to-br from-sky-400 to-blue-600 rounded-lg p-1.5 shadow-lg shadow-blue-500/20">
-                        <BookOpen className="h-5 w-5 text-white" />
+                <Link href="/" className="flex items-center gap-3">
+                    <div className="bg-white rounded-xl p-1 shadow-lg shadow-purple-500/20 flex items-center justify-center">
+                        <Image src="/logo.png" alt="Logo" width={28} height={28} className="rounded-lg object-contain" />
                     </div>
                     <span className="font-bold text-lg tracking-tight bg-gradient-to-b from-[var(--foreground)] to-[var(--foreground)]/70 bg-clip-text text-transparent">
                         UX Glossary

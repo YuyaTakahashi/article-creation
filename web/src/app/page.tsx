@@ -41,17 +41,7 @@ export default function CreateTermPage() {
   return (
     <div className="min-h-full p-8 md:p-12 animate-fade-in flex justify-center items-start">
       <div className="w-full max-w-3xl">
-        <div className="mb-10 text-center animate-slide-up" style={{ animationDelay: "100ms" }}>
-          <div className="inline-flex items-center justify-center p-3 mb-4 rounded-2xl glass">
-            <Sparkles className="w-8 h-8 text-[var(--color-primary)]" />
-          </div>
-          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight mb-4 text-transparent bg-clip-text bg-gradient-to-r from-[var(--foreground)] to-[var(--foreground)]/60">
-            用語を自動生成
-          </h1>
-          <p className="text-lg text-[var(--foreground)]/60">
-            Dify AIを使用して、高度に最適化されたUX用語解説記事を作成します。
-          </p>
-        </div>
+
 
         <form onSubmit={handleSubmit} className="glass rounded-3xl p-8 md:p-10 shadow-2xl animate-slide-up" style={{ animationDelay: "200ms" }}>
           <div className="space-y-8">
@@ -106,7 +96,7 @@ export default function CreateTermPage() {
                   step="0.1"
                   value={difficulty}
                   onChange={(e) => setDifficulty(parseFloat(e.target.value))}
-                  className="w-full h-2 bg-black/10 dark:bg-white/10 rounded-lg appearance-none cursor-pointer accent-[var(--color-primary)]"
+                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[var(--color-primary)] shadow-inner"
                 />
                 <div className="flex justify-between text-xs text-[var(--foreground)]/50 font-medium px-1">
                   <span>初心者</span>
@@ -132,7 +122,7 @@ export default function CreateTermPage() {
                   step="0.1"
                   value={literacy}
                   onChange={(e) => setLiteracy(parseFloat(e.target.value))}
-                  className="w-full h-2 bg-black/10 dark:bg-white/10 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-500 shadow-inner"
                 />
                 <div className="flex justify-between text-xs text-[var(--foreground)]/50 font-medium px-1">
                   <span>低</span>
@@ -161,7 +151,7 @@ export default function CreateTermPage() {
               <button
                 type="submit"
                 disabled={!topic}
-                className="group relative w-full flex items-center justify-center gap-3 overflow-hidden rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-blue-600 px-8 py-4 text-white font-bold text-lg shadow-lg shadow-blue-500/25 transition-all hover:scale-[1.02] hover:shadow-xl hover:shadow-blue-500/40 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+                className="group relative w-full flex items-center justify-center gap-3 overflow-hidden rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-purple-600 px-8 py-4 text-white font-bold text-lg shadow-lg shadow-purple-500/25 transition-all hover:scale-[1.02] hover:shadow-xl hover:shadow-purple-500/40 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
               >
                 <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out" />
                 <span className="relative flex items-center gap-2">

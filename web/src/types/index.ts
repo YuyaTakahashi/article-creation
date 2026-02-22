@@ -8,6 +8,7 @@ export interface GlossaryTerm {
     createdAt: number;
     status: "pending" | "completed" | "error";
     progress?: number;
+    completedNodes?: number;
     currentNode?: string;
     wpLink?: string;
     difyResponse?: string;

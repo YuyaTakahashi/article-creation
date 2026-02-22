@@ -47,6 +47,10 @@ export default function HistoryPage() {
                     let fullAnswer = "";
                     let buffer = "";
 
+                    // Define expected total nodes for progress calculation
+                    const TOTAL_EXPECTED_NODES = 25;
+                    let completedNodesCount = 0;
+
                     // Process the Streaming chunks
                     while (true) {
                         const { done, value } = await reader.read();
@@ -71,7 +75,13 @@ export default function HistoryPage() {
                                         // Update current workflow node (e.g., "Information Gathering", "Article Writing")
                                         updateTerm(task.id, { currentNode: data.data.title });
                                     } else if (data.event === "node_finished") {
-                                        updateTerm(task.id, { currentNode: `完了: ${data.data.title}` });
+                                        completedNodesCount++;
+                                        const calculatedProgress = Math.min(Math.round((completedNodesCount / TOTAL_EXPECTED_NODES) * 100), 99);
+                                        updateTerm(task.id, {
+                                            currentNode: `完了: ${data.data.title}`,
+                                            completedNodes: completedNodesCount,
+                                            progress: calculatedProgress
+                                        });
                                     } else if (data.event === "message" || data.event === "agent_message" || data.event === "text_chunk") {
                                         if (data.answer) {
                                             fullAnswer += data.answer;
@@ -99,6 +109,7 @@ export default function HistoryPage() {
                         difyResponse: fullAnswer,
                         wpLink: wpLink,
                         currentNode: "すべての処理が完了しました",
+                        progress: 100,
                     });
 
                 } catch (error) {
@@ -125,7 +136,8 @@ export default function HistoryPage() {
             // Docs link could be extracted from difyResponse if it exists
             let docUrl = undefined;
             if (difyResponse) {
-                const docMatch = difyResponse.match(/https:\/\/docs\.google\.com\/document\/d\/[a-zA-Z0-9_-]+/);
+                // Match either the standard /document/d/ URL or the /open?id= URL
+                const docMatch = difyResponse.match(/https:\/\/docs\.google\.com\/(?:document\/d\/|open\?id=)[a-zA-Z0-9_-]+/);
                 if (docMatch) docUrl = docMatch[0];
             }
 
@@ -149,10 +161,17 @@ export default function HistoryPage() {
                         console.warn("Some remote resources could not be deleted:", data.errors);
                         // We still proceed to delete locally if it was just a generic error (e.g., already deleted)
                     }
+                } else {
+                    const errorData = await res.json().catch(() => ({}));
+                    console.error("Server API returned an error:", errorData);
+                    alert(`サーバーエラーにより削除を中止しました。設定等を確認してください。`);
+                    shouldDeleteLocal = false;
                 }
             }
         } catch (e) {
             console.error("Failed to delete remote resources", e);
+            alert("通信エラーが発生し、削除できませんでした。");
+            shouldDeleteLocal = false;
         } finally {
             // Remove from local history UI if not protected
             if (shouldDeleteLocal) {
@@ -213,8 +232,13 @@ export default function HistoryPage() {
                                             {item.status === "pending" && item.currentNode && (
                                                 <>
                                                     <span>•</span>
-                                                    <span className="text-[var(--color-primary)] font-medium bg-[var(--color-primary)]/10 px-2 py-0.5 rounded-full animate-pulse">
-                                                        {item.currentNode} を実行中...
+                                                    <span className="flex items-center gap-2 text-[var(--color-primary)] font-medium bg-[var(--color-primary)]/10 px-2 py-0.5 rounded-full animate-pulse">
+                                                        <span>{item.currentNode} を実行中...</span>
+                                                        {item.progress !== undefined && (
+                                                            <span className="bg-white/50 dark:bg-black/20 text-[var(--color-primary)] px-1.5 py-0.5 rounded-md text-[10px] font-bold">
+                                                                {item.progress}%
+                                                            </span>
+                                                        )}
                                                     </span>
                                                 </>
                                             )}
@@ -235,9 +259,10 @@ export default function HistoryPage() {
                                         )}
                                         <Link
                                             href={`/detail/${item.id}`}
-                                            className="p-2 rounded-xl bg-[var(--color-primary)]/10 hover:bg-[var(--color-primary)]/20 text-[var(--color-primary)] transition-colors"
+                                            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-[var(--color-primary)]/10 hover:bg-[var(--color-primary)]/20 text-[var(--color-primary)] transition-all font-bold text-sm"
                                         >
-                                            <ArrowRight className="w-5 h-5" />
+                                            詳細
+                                            <ArrowRight className="w-4 h-4" />
                                         </Link>
                                         {item.isDeleteProtected ? (
                                             <div
@@ -249,10 +274,18 @@ export default function HistoryPage() {
                                         ) : (
                                             <button
                                                 onClick={() => handleDelete(item.id, item.wpLink, item.difyResponse)}
-                                                className="p-2 ml-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-500 transition-colors"
+                                                disabled={isDeleting === item.id}
+                                                className={`p-2 ml-2 rounded-xl flex items-center gap-2 transition-colors ${isDeleting === item.id ? 'bg-red-500/20 text-red-500 cursor-wait' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500'}`}
                                                 title="削除する"
                                             >
-                                                {isDeleting === item.id ? <Loader2 className="w-5 h-5 animate-spin" /> : <Trash2 className="w-5 h-5" />}
+                                                {isDeleting === item.id ? (
+                                                    <>
+                                                        <Loader2 className="w-5 h-5 animate-spin" />
+                                                        <span className="text-sm font-bold">削除中...</span>
+                                                    </>
+                                                ) : (
+                                                    <Trash2 className="w-5 h-5" />
+                                                )}
                                             </button>
                                         )}
                                     </div>
@@ -260,8 +293,13 @@ export default function HistoryPage() {
 
                                 {/* Processing Progress Bar visualization */}
                                 {item.status === "pending" && (
-                                    <div className="absolute bottom-0 left-0 w-full h-[3px] bg-[var(--color-primary)]/10 overflow-hidden">
-                                        <div className="h-full bg-gradient-to-r from-transparent via-[var(--color-primary)] to-[var(--color-primary)] w-[60%] animate-progress-indeterminate shadow-[0_0_10px_var(--color-primary)]" />
+                                    <div className="absolute bottom-0 left-0 w-full h-[4px] bg-[var(--color-primary)]/10 overflow-hidden group-hover:h-[6px] transition-all">
+                                        <div
+                                            className="h-full bg-gradient-to-r from-[var(--color-primary)]/60 to-[var(--color-primary)] transition-all duration-500 ease-out relative"
+                                            style={{ width: `${item.progress || 5}%` }}
+                                        >
+                                            <div className="absolute inset-0 bg-white/30 animate-pulse"></div>
+                                        </div>
                                     </div>
                                 )}
                             </div>
