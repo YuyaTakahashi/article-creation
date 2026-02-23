@@ -18,7 +18,7 @@ export async function POST(request: Request) {
                 Target_Task_ID: body.taskId || "",
             },
             query: body.context || "特になし",
-            response_mode: "streaming", // Enable streaming
+            response_mode: "blocking", // Fire and forget on the server side
             user: "ux-glossary-web-user",
         };
 
@@ -37,14 +37,8 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Failed to connect to Dify API" }, { status: response.status });
         }
 
-        // Forward the Dify SSE stream directly to the client
-        return new Response(response.body, {
-            headers: {
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache, no-transform",
-                "Connection": "keep-alive",
-            },
-        });
+        // Just return immediately instead of holding the connection
+        return NextResponse.json({ success: true, message: "Workflow started" });
 
     } catch (error) {
         console.error("Internal API Error:", error);
