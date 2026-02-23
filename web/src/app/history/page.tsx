@@ -176,6 +176,12 @@ export default function HistoryPage() {
                                         </div>
                                         <div className="flex flex-wrap items-center gap-2 md:gap-3 text-[10px] md:text-xs text-[var(--foreground)]/50">
                                             <span>{new Date(Number(item.createdAt)).toLocaleDateString("ja-JP")}</span>
+                                            {item.mail && (
+                                                <>
+                                                    <span className="hidden md:inline">•</span>
+                                                    <span>{item.mail}</span>
+                                                </>
+                                            )}
                                         </div>
                                     </div>
 
