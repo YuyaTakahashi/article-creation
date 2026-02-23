@@ -1,86 +1,60 @@
 function doPost(e) {
-  // 🔴デバッグ用: どんなリクエストが来ても、まず一番最初に生データを保存する
   try {
-    const rawDoc = DocumentApp.create('【受信ログ】Dify生データ_' + new Date().getTime());
-    const rawBody = rawDoc.getBody();
-    rawBody.appendParagraph('リクエスト受信時刻: ' + new Date().toLocaleString());
-    rawBody.appendParagraph('◆ イベントオブジェクト(文字列化):');
-    rawBody.appendParagraph(JSON.stringify(e || {}));
-    if (e && e.postData) {
-      rawBody.appendParagraph('◆ postData.contents:');
-      rawBody.appendParagraph(e.postData.contents || 'No contents');
-      rawBody.appendParagraph('◆ postData.type (MIME):');
-      rawBody.appendParagraph(e.postData.type || 'No type');
-    }
-    rawDoc.saveAndClose();
-  } catch(e3) {
-    // ログ作成自体が失敗した場合は無視
-  }
-
-  // 1. JSONデータをパース
-  let jsonString = '';
-  let data = {};
-  
-  try {
-    jsonString = e.postData.contents;
-    data = JSON.parse(jsonString);
-  } catch (parseError) {
-    // 🔴デバッグ用: JSONパースに失敗した場合、生の文字列をGoogle Docにログとして残す
+    // 1. JSONデータをパース
+    let jsonString = '';
+    let data = {};
+    
     try {
-      const errDoc = DocumentApp.create('【エラーログ】Dify送信データ');
-      const errBody = errDoc.getBody();
-      errBody.appendParagraph('JSONパースエラー発生: ' + new Date().toLocaleString());
-      errBody.appendParagraph('▼受信した生データ:');
-      errBody.appendParagraph(jsonString || 'データなし');
-      errBody.appendParagraph('▼エラー内容:');
-      errBody.appendParagraph(parseError.toString());
-      errDoc.saveAndClose();
-    } catch(e2) {}
+      jsonString = e.postData.contents;
+      data = JSON.parse(jsonString);
+    } catch (parseError) {
+      return createResponse(400, "Invalid JSON format: " + parseError.toString());
+    }
     
-    return createResponse(400, "Invalid JSON format: " + parseError.toString());
-  }
-  
-  // 2. プロパティ取得
-  const props = PropertiesService.getScriptProperties();
-  const WP_SITE_URL = props.getProperty('WP_SITE_URL');
-  const WP_USER     = props.getProperty('WP_USER');
-  const WP_APP_PASS = props.getProperty('WP_APP_PASS');
-  const POST_TYPE   = props.getProperty('POST_TYPE') || 'posts';
+    // 2. プロパティ取得
+    const props = PropertiesService.getScriptProperties();
+    const WP_SITE_URL = props.getProperty('WP_SITE_URL');
+    const WP_USER     = props.getProperty('WP_USER');
+    const WP_APP_PASS = props.getProperty('WP_APP_PASS');
+    const POST_TYPE   = props.getProperty('POST_TYPE') || 'posts';
 
-  const authHeader = 'Basic ' + Utilities.base64Encode(WP_USER + ':' + WP_APP_PASS);
+    const authHeader = 'Basic ' + Utilities.base64Encode(WP_USER + ':' + WP_APP_PASS);
 
-  // 3. アクション分岐
-  if (data.action === 'search') {
-    return handleBatchSearch(data, WP_SITE_URL, authHeader, POST_TYPE);
-    
-  } else if (data.action === 'post') { 
-    return handlePost(data, WP_SITE_URL, authHeader, POST_TYPE);
-    
-  } else if (data.action === 'upload_media') { 
-    // ★★★ これを追加！画像単体アップロード用 ★★★
-    return handleMediaUploadOnly(data, WP_SITE_URL, authHeader);
-    
-  } else if (data.action === 'delete') {
-    return handleDelete(data, WP_SITE_URL, authHeader, POST_TYPE);
-    
-  } else if (data.action === 'create_doc' || (!data.action && data.title)) {
-    // ★追加: アクション未指定でも title があればドキュメント作成とみなす (Dify互換)
-    return handleCreateDoc(data);
-    
-  } else if (data.action === 'save_history') {
-    return handleSaveHistory(data);
-    
-  } else if (data.action === 'get_history') {
-    return handleGetHistory(data);
-    
-  } else if (data.action === 'update_history') {
-    return handleUpdateHistory(data);
-    
-  } else if (data.action === 'delete_history') {
-    return handleDeleteHistory(data);
-    
-  } else {
-    return createResponse(400, "Invalid Action");
+    // 3. アクション分岐
+    if (data.action === 'search') {
+      return handleBatchSearch(data, WP_SITE_URL, authHeader, POST_TYPE);
+      
+    } else if (data.action === 'post') { 
+      return handlePost(data, WP_SITE_URL, authHeader, POST_TYPE);
+      
+    } else if (data.action === 'upload_media') { 
+      return handleMediaUploadOnly(data, WP_SITE_URL, authHeader);
+      
+    } else if (data.action === 'delete') {
+      return handleDelete(data, WP_SITE_URL, authHeader, POST_TYPE);
+      
+    } else if (data.action === 'create_doc' || (!data.action && data.title)) {
+      return handleCreateDoc(data);
+      
+    } else if (data.action === 'save_history') {
+      return handleSaveHistory(data);
+      
+    } else if (data.action === 'get_history') {
+      return handleGetHistory(data);
+      
+    } else if (data.action === 'update_history') {
+      return handleUpdateHistory(data);
+      
+    } else if (data.action === 'delete_history') {
+      return handleDeleteHistory(data);
+      
+    } else if (data.action === 'read_logs') {
+      return createResponse(200, "Logs logic not implemented yet");
+    } else {
+      return createResponse(400, "Invalid Action");
+    }
+  } catch (globalError) {
+    return createResponse(500, "Global doPost Error: " + globalError.toString() + "\nStack: " + globalError.stack);
   }
 }
 
@@ -94,11 +68,15 @@ function handleBatchSearch(data, siteUrl, auth, postType) {
   // ★追加：Difyから「単なる文字列（String）」として送られてきた場合、パースしてオブジェクトに戻す
   if (typeof keywordsMap === 'string') {
     try {
-      // LLMが余計に付けた ```json と ``` を取り除く
-      const cleanString = keywordsMap.replace(/^```(json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-      keywordsMap = JSON.parse(cleanString);
+      // LLMが余計に付けたマークダウンやテキストを取り除く（最初に見つかった { または [ から、最後に見つかった } または ] までを抽出）
+      const match = keywordsMap.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+      if (match) {
+        keywordsMap = JSON.parse(match[0]);
+      } else {
+        throw new Error("JSONの括弧が見つかりません。");
+      }
     } catch (e) {
-      return createResponse(400, "JSONパースエラー: 文字列を変換できませんでした");
+      return createResponse(400, `JSONパースエラー: 文字列を変換できませんでした。受信データ: ${keywordsMap}`, null);
     }
   }
 
@@ -227,19 +205,20 @@ function handlePost(data, siteUrl, auth, postType) {
 
 
   if (data.categoryIds) {
-    const extractId = (val) => {
-      const match = String(val).match(/\d+/);
-      return match ? parseInt(match[0], 10) : NaN;
-    };
-
-    if (Array.isArray(data.categoryIds)) {
-      payload.categories = data.categoryIds.map(extractId).filter(id => !isNaN(id));
-    } else {
-      const parsedId = extractId(data.categoryIds);
-      if (!isNaN(parsedId)) {
-        payload.categories = [parsedId];
+    let ids = Array.isArray(data.categoryIds) ? data.categoryIds : [data.categoryIds];
+    
+    payload.categories = ids.map(id => {
+      // If it's a number-like string or number, parse it.
+      // Dify might send "22" or " 22 " or even just [22].
+      if (typeof id === 'string') {
+        // Just extract all digits, join them. If "category is 22", becomes 22.
+        const matches = id.match(/\d+/g);
+        if (matches && matches.length > 0) {
+           return parseInt(matches.join(''), 10);
+        }
       }
-    }
+      return parseInt(id, 10);
+    }).filter(id => !isNaN(id));
   }
 
   const endpoint = `${siteUrl}/wp-json/wp/v2/${postType}`;
@@ -255,15 +234,43 @@ function handlePost(data, siteUrl, auth, postType) {
     'muteHttpExceptions': true
   };
 
-    try {
+  try {
+    log(`WP POST Endpoint: ${endpoint}`);
+    log(`WP POST Payload: ${JSON.stringify(payload)}`);
     const response = UrlFetchApp.fetch(endpoint, options);
-    const result = JSON.parse(response.getContentText());
+    const rawResponse = response.getContentText();
+    log(`WP POST Response Code: ${response.getResponseCode()}, Body: ${rawResponse}`);
+    
+    // Only parse if it looks like JSON
+    let result = {};
+    if (rawResponse && rawResponse.startsWith('{')) {
+       result = JSON.parse(rawResponse);
+    } else {
+       throw new Error(`WordPress returned non-JSON response: ${rawResponse}`);
+    }
     
     // ★追加（修正版）: siteUrlをそのまま使って管理画面URLを組み立てる (サブディレクトリ対応)
     if (result && result.id) {
       // WordPressの編集画面URL（クラシックエディタ指定）
       // 例: https://uxdaystokyo.com/articles/wp-admin/post.php?post=37795&action=edit&classic-editor__forget&classic-editor
       result.editUrl = `${siteUrl}/wp-admin/post.php?post=${result.id}&action=edit&classic-editor__forget&classic-editor`;
+
+      // ★バックグラウンド更新: taskIdがあればスプレッドシート履歴を「完了」にする
+      if (data.taskId) {
+        log(`Updating history for taskId: ${data.taskId}`);
+        try {
+          handleUpdateHistory({
+            id: data.taskId,
+            updates: {
+              status: "completed",
+              progress: 100,
+              wpLink: result.editUrl
+            }
+          });
+        } catch (updateErr) {
+          log(`Failed to update history: ${updateErr}`);
+        }
+      }
     }
     // ★ここで古いファイルを自動削除（1ヶ月以上前）
     deleteOldFilesInFolder();
