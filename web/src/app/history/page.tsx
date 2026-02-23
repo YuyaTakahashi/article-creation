@@ -2,13 +2,21 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useGlossaryHistory } from "@/hooks/useGlossaryHistory";
-import { Loader2, CheckCircle2, XCircle, ArrowRight, ExternalLink, Trash2, Lock } from "lucide-react";
+import { Loader2, AlertTriangle, FileText, ArrowRight, Trash2, MoreVertical, ExternalLink, Lock, XCircle, CheckCircle2 } from "lucide-react";
 
 export default function HistoryPage() {
-    const { history, updateTerm, deleteTerm, isMounted } = useGlossaryHistory();
+    const { history, updateTerm, deleteTerm, isMounted, loading } = useGlossaryHistory();
+    const router = useRouter();
+    const [mail] = useLocalStorage("ux_glossary_user_mail", "");
     const processingRef = useRef<Set<string>>(new Set());
+    const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
+    const menuRef = useRef<HTMLDivElement>(null);
+
     const [isDeleting, setIsDeleting] = useState<string | null>(null);
+    const [activeMenu, setActiveMenu] = useState<string | null>(null);
 
     // Background worker to process pending terms
     useEffect(() => {
@@ -18,14 +26,20 @@ export default function HistoryPage() {
             const pendingTasks = history.filter((t) => t.status === "pending");
 
             for (const task of pendingTasks) {
+                // Determine immediately if we should process
                 if (processingRef.current.has(task.id)) continue;
 
+                // Mark as processing synchronously before any await
                 processingRef.current.add(task.id);
+
+                const controller = new AbortController();
+                abortControllersRef.current.set(task.id, controller);
 
                 try {
                     const res = await fetch("/api/dify", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
+                        signal: controller.signal,
                         body: JSON.stringify({
                             topic: task.topic,
                             mail: task.mail,
@@ -113,40 +127,76 @@ export default function HistoryPage() {
                     });
 
                 } catch (error) {
+                    if (error instanceof Error && error.name === 'AbortError') {
+                        console.log(`Generation for task ${task.id} was cancelled.`);
+                        return; // Exit if aborted
+                    }
+
+                    console.error("Background worker error:", error);
                     updateTerm(task.id, {
                         status: "error",
                         errorMessage: error instanceof Error ? error.message : "Unknown error",
                     });
                 } finally {
                     processingRef.current.delete(task.id);
+                    abortControllersRef.current.delete(task.id);
                 }
             }
         };
 
         processPendingTasks();
+
+        // Cleanup function to abort requests if component unmounts
+        return () => {
+            // Uncomment the following lines if we want to cancel generation on unmount
+            // Currently we want background processing to continue if possible, 
+            // but Next.js router transitions usually keep the state alive anyway unless it's a hard nav.
+            /*
+            abortControllersRef.current.forEach(controller => controller.abort());
+            abortControllersRef.current.clear();
+            processingRef.current.clear();
+            */
+        };
     }, [history, isMounted, updateTerm]);
+
+    // Handle click away for dropdown menu
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            const target = event.target as Element;
+            if (target.closest('.menu-toggle-btn')) return;
+            if (menuRef.current && !menuRef.current.contains(target)) {
+                setActiveMenu(null);
+            }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
 
     const handleDelete = async (id: string, wpLink?: string, difyResponse?: string) => {
         if (!confirm("この履歴を削除しますか？紐づくWordPressの下書きやDocも削除されます。")) return;
 
         setIsDeleting(id);
+        setActiveMenu(null);
         let shouldDeleteLocal = true;
 
         try {
-            // Docs link could be extracted from difyResponse if it exists
-            let docUrl = undefined;
+            // Docs links could be extracted from difyResponse if it exists
+            let docUrls: string[] = [];
             if (difyResponse) {
-                // Match either the standard /document/d/ URL or the /open?id= URL
-                const docMatch = difyResponse.match(/https:\/\/docs\.google\.com\/(?:document\/d\/|open\?id=)[a-zA-Z0-9_-]+/);
-                if (docMatch) docUrl = docMatch[0];
+                // Match all standard /document/d/ URLs or /open?id= URLs
+                const docMatches = difyResponse.match(/https:\/\/docs\.google\.com\/(?:document\/d\/|open\?id=)[a-zA-Z0-9_-]+/g);
+                if (docMatches) {
+                    // Unique URLs only
+                    docUrls = Array.from(new Set(docMatches));
+                }
             }
 
             // Attempt to delete remote resources if URLs are present
-            if (wpLink || docUrl) {
+            if (wpLink || docUrls.length > 0) {
                 const res = await fetch("/api/gas/delete", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ wpLink, docUrl })
+                    body: JSON.stringify({ wpLink, docUrl: docUrls })
                 });
 
                 if (res.ok) {
@@ -181,16 +231,37 @@ export default function HistoryPage() {
         }
     };
 
+    const handleCancel = (id: string) => {
+        if (!confirm("作成処理を中止し、この履歴を削除しますか？")) return;
+
+        // Abort the fetch request if it's running
+        const controller = abortControllersRef.current.get(id);
+        if (controller) {
+            controller.abort();
+            abortControllersRef.current.delete(id);
+        }
+        processingRef.current.delete(id);
+
+        // Delete the item completely from local state
+        deleteTerm(id);
+        setActiveMenu(null);
+    };
+
     if (!isMounted) return null;
 
     return (
-        <div className="min-h-full p-8 md:p-12 animate-fade-in">
+        <div className="min-h-full p-4 md:p-12 animate-fade-in pb-24 md:pb-12">
             <div className="max-w-4xl mx-auto">
-                <h1 className="text-3xl font-extrabold tracking-tight mb-8 text-[var(--foreground)]">
+                <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight mb-6 md:mb-8 text-[var(--foreground)]">
                     作成履歴
                 </h1>
 
-                {history.length === 0 ? (
+                {loading ? (
+                    <div className="glass rounded-3xl p-12 text-center text-[var(--foreground)]/50 flex flex-col items-center justify-center gap-4">
+                        <Loader2 className="w-8 h-8 animate-spin text-[var(--color-primary)] opacity-80" />
+                        <p className="font-bold tracking-wide">データベースから履歴を取得中...</p>
+                    </div>
+                ) : history.length === 0 ? (
                     <div className="glass rounded-3xl p-12 text-center text-[var(--foreground)]/50">
                         <p>まだ履歴がありません。新しい用語を作成してください。</p>
                     </div>
@@ -199,13 +270,24 @@ export default function HistoryPage() {
                         {history.map((item, idx) => (
                             <div
                                 key={item.id}
-                                className={`glass group rounded-2xl p-5 hover:bg-white/10 dark:hover:bg-black/10 transition-all animate-slide-up relative overflow-hidden flex flex-col gap-3 ${isDeleting === item.id ? 'opacity-50 pointer-events-none' : ''}`}
+                                onClick={(e) => {
+                                    // Prevent jumping if we clicked a button inside
+                                    if (item.status !== "pending" && isDeleting !== item.id) {
+                                        router.push(`/detail/${item.id}`);
+                                    }
+                                }}
+                                className={`glass group rounded-2xl p-5 transition-all duration-300 relative flex flex-col gap-3 
+                                    ${item.status === "pending" ? 'animate-[pulse_3s_cubic-bezier(0.4,0,0.6,1)_infinite] bg-[var(--color-primary)]/5 border-[var(--color-primary)]/20' : 'animate-slide-up'}
+                                    ${isDeleting === item.id ? 'opacity-50 pointer-events-none' : ''} 
+                                    ${item.status !== "pending"
+                                        ? 'cursor-pointer hover:border-[var(--color-primary)]/50 hover:shadow-lg hover:-translate-y-0.5'
+                                        : 'cursor-default'}`}
                                 style={{ animationDelay: `${idx * 50}ms` }}
                             >
-                                <div className="flex items-center justify-between gap-4 z-10">
+                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 z-10">
                                     <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-3 mb-1">
-                                            <h2 className="text-lg font-bold text-[var(--foreground)] truncate">
+                                        <div className="flex flex-wrap items-center gap-2 md:gap-3 mb-1">
+                                            <h2 className="text-base md:text-lg font-bold text-[var(--foreground)] truncate max-w-[200px] md:max-w-none">
                                                 {item.topic}
                                             </h2>
                                             {item.status === "pending" && (
@@ -227,15 +309,15 @@ export default function HistoryPage() {
                                                 </span>
                                             )}
                                         </div>
-                                        <div className="flex items-center gap-3 text-xs text-[var(--foreground)]/50">
-                                            <span>作成日: {new Date(item.createdAt).toLocaleString("ja-JP")}</span>
+                                        <div className="flex flex-wrap items-center gap-2 md:gap-3 text-[10px] md:text-xs text-[var(--foreground)]/50">
+                                            <span>{new Date(Number(item.createdAt)).toLocaleDateString("ja-JP")}</span>
                                             {item.status === "pending" && item.currentNode && (
                                                 <>
-                                                    <span>•</span>
+                                                    <span className="hidden md:inline">•</span>
                                                     <span className="flex items-center gap-2 text-[var(--color-primary)] font-medium bg-[var(--color-primary)]/10 px-2 py-0.5 rounded-full animate-pulse">
-                                                        <span>{item.currentNode} を実行中...</span>
+                                                        <span>{item.currentNode}</span>
                                                         {item.progress !== undefined && (
-                                                            <span className="bg-white/50 dark:bg-black/20 text-[var(--color-primary)] px-1.5 py-0.5 rounded-md text-[10px] font-bold">
+                                                            <span className="bg-white/50 dark:bg-black/20 text-[var(--color-primary)] px-1 py-0.5 rounded text-[10px] font-bold">
                                                                 {item.progress}%
                                                             </span>
                                                         )}
@@ -245,49 +327,79 @@ export default function HistoryPage() {
                                         </div>
                                     </div>
 
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex items-center justify-end gap-2 md:gap-3 mt-2 md:mt-0">
                                         {item.wpLink && (
                                             <a
                                                 href={item.wpLink}
                                                 target="_blank"
                                                 rel="noreferrer"
+                                                onClick={(e) => e.stopPropagation()}
                                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl glass bg-[var(--color-primary)]/10 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/20 transition-all font-bold text-sm shadow-sm"
                                             >
                                                 WordPressで開く
                                                 <ExternalLink className="w-4 h-4" />
                                             </a>
                                         )}
-                                        <Link
-                                            href={`/detail/${item.id}`}
-                                            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-[var(--color-primary)]/10 hover:bg-[var(--color-primary)]/20 text-[var(--color-primary)] transition-all font-bold text-sm"
-                                        >
-                                            詳細
-                                            <ArrowRight className="w-4 h-4" />
-                                        </Link>
-                                        {item.isDeleteProtected ? (
-                                            <div
-                                                className="p-2 ml-2 rounded-xl bg-[var(--foreground)]/10 text-[var(--foreground)]/50 cursor-not-allowed tooltip"
-                                                title="公開済みの記事のため削除できません"
-                                            >
-                                                <Lock className="w-5 h-5" />
-                                            </div>
-                                        ) : (
+                                        <div className="relative ml-1" onClick={(e) => e.stopPropagation()}>
                                             <button
-                                                onClick={() => handleDelete(item.id, item.wpLink, item.difyResponse)}
-                                                disabled={isDeleting === item.id}
-                                                className={`p-2 ml-2 rounded-xl flex items-center gap-2 transition-colors ${isDeleting === item.id ? 'bg-red-500/20 text-red-500 cursor-wait' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500'}`}
-                                                title="削除する"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setActiveMenu(activeMenu === item.id ? null : item.id);
+                                                }}
+                                                className="menu-toggle-btn p-2 rounded-xl text-[var(--foreground)]/50 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
                                             >
-                                                {isDeleting === item.id ? (
-                                                    <>
-                                                        <Loader2 className="w-5 h-5 animate-spin" />
-                                                        <span className="text-sm font-bold">削除中...</span>
-                                                    </>
-                                                ) : (
-                                                    <Trash2 className="w-5 h-5" />
-                                                )}
+                                                <MoreVertical className="w-5 h-5" />
                                             </button>
-                                        )}
+
+                                            {activeMenu === item.id && (
+                                                <div
+                                                    ref={menuRef}
+                                                    className="absolute right-0 top-full mt-2 w-48 rounded-xl glass shadow-xl border border-[var(--foreground)]/10 overflow-hidden z-50 animate-fade-in origin-top-right"
+                                                >
+                                                    {item.status === "pending" ? (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setActiveMenu(null);
+                                                                // Call handleCancel and pass the ID
+                                                                handleCancel(item.id);
+                                                            }}
+                                                            className="w-full flex items-center gap-3 px-4 py-3 text-sm text-amber-500 hover:bg-amber-500/10 transition-colors text-left font-medium"
+                                                        >
+                                                            <XCircle className="w-4 h-4" />
+                                                            <span>処理をキャンセル</span>
+                                                        </button>
+                                                    ) : item.isDeleteProtected ? (
+                                                        <div className="flex items-center gap-3 px-4 py-3 text-sm text-[var(--foreground)]/50 cursor-not-allowed">
+                                                            <Lock className="w-4 h-4" />
+                                                            <span>削除不可 (公開済)</span>
+                                                        </div>
+                                                    ) : (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setActiveMenu(null);
+                                                                handleDelete(item.id, item.wpLink, item.difyResponse);
+                                                            }}
+                                                            disabled={isDeleting === item.id}
+                                                            className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-500 hover:bg-red-500/10 transition-colors text-left font-medium disabled:opacity-50 disabled:cursor-wait"
+                                                        >
+                                                            {isDeleting === item.id ? (
+                                                                <>
+                                                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                                                    <span>削除中...</span>
+                                                                </>
+                                                            ) : (
+                                                                <>
+                                                                    <Trash2 className="w-4 h-4" />
+                                                                    <span>この履歴を削除</span>
+                                                                </>
+                                                            )}
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
 

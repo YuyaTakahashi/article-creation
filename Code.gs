@@ -67,6 +67,18 @@ function doPost(e) {
     // ★追加: アクション未指定でも title があればドキュメント作成とみなす (Dify互換)
     return handleCreateDoc(data);
     
+  } else if (data.action === 'save_history') {
+    return handleSaveHistory(data);
+    
+  } else if (data.action === 'get_history') {
+    return handleGetHistory(data);
+    
+  } else if (data.action === 'update_history') {
+    return handleUpdateHistory(data);
+    
+  } else if (data.action === 'delete_history') {
+    return handleDeleteHistory(data);
+    
   } else {
     return createResponse(400, "Invalid Action");
   }
@@ -215,10 +227,15 @@ function handlePost(data, siteUrl, auth, postType) {
 
 
   if (data.categoryIds) {
+    const extractId = (val) => {
+      const match = String(val).match(/\d+/);
+      return match ? parseInt(match[0], 10) : NaN;
+    };
+
     if (Array.isArray(data.categoryIds)) {
-      payload.categories = data.categoryIds.map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+      payload.categories = data.categoryIds.map(extractId).filter(id => !isNaN(id));
     } else {
-      const parsedId = parseInt(data.categoryIds, 10);
+      const parsedId = extractId(data.categoryIds);
       if (!isNaN(parsedId)) {
         payload.categories = [parsedId];
       }
@@ -317,24 +334,31 @@ function handleDelete(data, siteUrl, auth, postType) {
   }
 
   // 2. Google Docsの削除 (docUrl がフロントから渡された場合)
-  // （もしDifyがDocsのURLも出力していてフロントでパースできた場合）
+  // フロントからは単一のURL文字列、またはURLの配列が渡される可能性がある
   if (data.docUrl) {
-    try {
-      let docId = null;
-      let docMatch = data.docUrl.match(/\/d\/(.*?)\//);
-      if (docMatch) {
-         docId = docMatch[1];
-      } else {
-         docMatch = data.docUrl.match(/open\?id=([a-zA-Z0-9_-]+)/);
-         if (docMatch) docId = docMatch[1];
+    const docUrls = Array.isArray(data.docUrl) ? data.docUrl : [data.docUrl];
+    
+    for (const url of docUrls) {
+      try {
+        let docId = null;
+        // より汎用的なID抽出: /d/XXX/ または /d/XXX (末尾スラなし対応)
+        const docMatch = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+        if (docMatch) {
+           docId = docMatch[1];
+        } else {
+           const idMatch = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+           if (idMatch) docId = idMatch[1];
+        }
+        
+        if (docId) {
+          DriveApp.getFileById(docId).setTrashed(true);
+          docDeleted = true;
+          log(`Doc Deleted: ${docId}`);
+        }
+      } catch (e) {
+          log(`Google Docs Delete Error for ${url}: ${e.toString()}`);
+          errors.push(`Google Docs Delete Error (${url}): ${e.toString()}`);
       }
-      
-      if (docId) {
-        DriveApp.getFileById(docId).setTrashed(true);
-        docDeleted = true;
-      }
-    } catch (e) {
-        errors.push("Google Docs Delete Error: " + e.toString());
     }
   }
 
@@ -757,5 +781,147 @@ function handleCreateDoc(data) {
       status: 'error',
       message: error.toString()
     })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ==========================================
+// DB: スプレッドシート履歴管理
+// ==========================================
+// 履歴保存用シートID
+const HISTORY_SHEET_ID = '13Au8w9webxS6PxNEBKOsEJ40PvsDCCG5L5MDxAPliqI';
+
+function initSpreadsheet() {
+  const ss = SpreadsheetApp.openById(HISTORY_SHEET_ID);
+  const sheet = ss.getSheets()[0];
+  const headers = ['id', 'term', 'email', 'createdAt', 'status', 'difyResponse', 'wpLink', 'progress', 'difficulty', 'literacy', 'context'];
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  // デザイン調整
+  sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#f3f4f6');
+  sheet.setFrozenRows(1);
+}
+
+function handleGetHistory(data) {
+  try {
+    const ss = SpreadsheetApp.openById(HISTORY_SHEET_ID);
+    const sheet = ss.getSheets()[0];
+    
+    // 全データ取得 (ヘッダー除く)
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) {
+      return createResponse(200, "success", { history: [] });
+    }
+    
+    // ヘッダー以外のデータ行を取得 (11列分)
+    const rows = sheet.getRange(2, 1, lastRow - 1, 11).getValues();
+    const history = [];
+    
+    for (const row of rows) {
+      // row: [id, term, email, createdAt, status, difyResponse, wpLink, progress, difficulty, literacy, context]
+      history.push({
+        id: row[0],
+        topic: row[1],
+        mail: row[2],
+        createdAt: row[3],
+        status: row[4],
+        difyResponse: row[5],
+        wpLink: row[6],
+        progress: row[7],
+        difficulty: row[8],
+        literacy: row[9],
+        context: row[10]
+      });
+    }
+    
+    // 新しい順に並び替え
+    history.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    
+    return createResponse(200, "success", { history: history });
+  } catch (error) {
+    return createResponse(500, error.toString());
+  }
+}
+
+function handleSaveHistory(data) {
+  try {
+    const ss = SpreadsheetApp.openById(HISTORY_SHEET_ID);
+    const sheet = ss.getSheets()[0];
+    const { id, topic, mail, createdAt, status, difyResponse, wpLink, progress, difficulty, literacy, context } = data.historyItem;
+    
+    // 末尾に追加
+    sheet.appendRow([
+      id || '', 
+      topic || '', 
+      mail || '', 
+      createdAt || '', 
+      status || '', 
+      difyResponse || '', 
+      wpLink || '', 
+      progress || 0,
+      difficulty || 0.5,
+      literacy || 0.5,
+      context || ''
+    ]);
+    
+    return createResponse(200, "success");
+  } catch (error) {
+    return createResponse(500, error.toString());
+  }
+}
+
+function handleUpdateHistory(data) {
+  try {
+    const ss = SpreadsheetApp.openById(HISTORY_SHEET_ID);
+    const sheet = ss.getSheets()[0];
+    const { id, updates } = data;
+    
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return createResponse(404, "no data");
+    
+    const ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues().flat();
+    const rowIndex = ids.indexOf(id);
+    
+    if (rowIndex === -1) {
+      return createResponse(404, "ID not found");
+    }
+    
+    const actualRow = rowIndex + 2;
+    
+    // まとめて更新できるように、現在の行のデータを取得
+    const range = sheet.getRange(actualRow, 1, 1, 11);
+    const rowValues = range.getValues()[0];
+    
+    // rowData: [id, topic, mail, createdAt, status, difyResponse, wpLink, progress, difficulty, literacy, context]
+    if (updates.status !== undefined) rowValues[4] = updates.status;
+    if (updates.difyResponse !== undefined) rowValues[5] = updates.difyResponse;
+    if (updates.wpLink !== undefined) rowValues[6] = updates.wpLink;
+    if (updates.progress !== undefined) rowValues[7] = updates.progress;
+    
+    // 一括で書き戻し (1回のAPI呼び出しで済ませる)
+    range.setValues([rowValues]);
+    
+    return createResponse(200, "success");
+  } catch (error) {
+    return createResponse(500, error.toString());
+  }
+}
+
+function handleDeleteHistory(data) {
+  try {
+    const ss = SpreadsheetApp.openById(HISTORY_SHEET_ID);
+    const sheet = ss.getSheets()[0];
+    const id = data.id;
+    
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return createResponse(404, "no data");
+    
+    const ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues().flat();
+    const rowIndex = ids.indexOf(id);
+    
+    if (rowIndex !== -1) {
+      sheet.deleteRow(rowIndex + 2);
+    }
+    return createResponse(200, "success");
+  } catch (error) {
+    return createResponse(500, error.toString());
   }
 }

@@ -17,9 +17,13 @@ export default function CreateTermPage() {
   const [literacy, setLiteracy] = useState<number>(0.5);
   const [context, setContext] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!topic) return;
+    if (!topic || isSubmitting) return;
+
+    setIsSubmitting(true);
 
     const newTerm: GlossaryTerm = {
       id: crypto.randomUUID(),
@@ -32,19 +36,24 @@ export default function CreateTermPage() {
       status: "pending",
     };
 
-    addTerm(newTerm);
-    router.push("/history");
+    try {
+      await addTerm(newTerm);
+      router.push("/history");
+    } catch (error) {
+      console.error("Failed to add term", error);
+      setIsSubmitting(false);
+    }
   };
 
   if (!isMounted) return null; // Hydration safe
 
   return (
-    <div className="min-h-full p-8 md:p-12 animate-fade-in flex justify-center items-start">
+    <div className="min-h-full p-4 md:p-12 animate-fade-in flex justify-center items-start pb-24 md:pb-12">
       <div className="w-full max-w-3xl">
 
 
-        <form onSubmit={handleSubmit} className="glass rounded-3xl p-8 md:p-10 shadow-2xl animate-slide-up" style={{ animationDelay: "200ms" }}>
-          <div className="space-y-8">
+        <form onSubmit={handleSubmit} className="glass rounded-3xl p-6 md:p-10 shadow-2xl animate-slide-up" style={{ animationDelay: "200ms" }}>
+          <div className="space-y-6 md:space-y-8">
             {/* Term Name (topic) */}
             <div className="space-y-3">
               <label htmlFor="topic" className="block text-sm font-semibold text-[var(--foreground)]/90 tracking-wide">
@@ -69,9 +78,10 @@ export default function CreateTermPage() {
               <input
                 id="mail"
                 type="email"
+                required
                 value={mail}
                 onChange={(e) => setMail(e.target.value)}
-                placeholder="you@example.com (次回から自動入力されます)"
+                placeholder="you@example.com (履歴表示に必須)"
                 className="w-full rounded-xl glass-input px-5 py-4 text-base placeholder:text-[var(--foreground)]/30 focus:ring-2 focus:ring-[var(--color-primary)] transition-all"
               />
             </div>
@@ -147,20 +157,29 @@ export default function CreateTermPage() {
             </div>
 
             {/* Submit Button */}
-            <div className="pt-4">
-              <button
-                type="submit"
-                disabled={!topic}
-                className="group relative w-full flex items-center justify-center gap-3 overflow-hidden rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-purple-600 px-8 py-4 text-white font-bold text-lg shadow-lg shadow-purple-500/25 transition-all hover:scale-[1.02] hover:shadow-xl hover:shadow-purple-500/40 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-              >
-                <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out" />
-                <span className="relative flex items-center gap-2">
-                  <Bot className="w-6 h-6" />
-                  生成を開始する
-                  <Send className="w-5 h-5 ml-2 opacity-70 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
-                </span>
-              </button>
-            </div>
+            <button
+              type="submit"
+              disabled={!topic || isSubmitting}
+              className={`w-full relative group overflow-hidden rounded-xl font-bold py-5 px-8 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg mt-4 ${!topic || isSubmitting
+                ? 'bg-gray-200 dark:bg-white/10 text-gray-500 dark:text-gray-400'
+                : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white shadow-purple-500/25'
+                }`}
+            >
+              <div className="absolute inset-0 w-full h-full bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
+              <span className="relative flex items-center justify-center gap-3 text-lg tracking-wider">
+                {isSubmitting ? (
+                  <>
+                    <Bot className="w-5 h-5 animate-spin" />
+                    送信中...
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-5 h-5 group-hover:-translate-y-1 group-hover:translate-x-1 transition-transform" />
+                    用語生成をリクエスト
+                  </>
+                )}
+              </span>
+            </button>
           </div>
         </form>
       </div>

@@ -12,8 +12,8 @@ export async function POST(request: Request) {
         const payload = {
             inputs: {
                 topic: body.topic,
-                Target_Difficulty: body.difficulty,
-                Target_IT_Literacy: body.literacy,
+                Target_Difficulty: body.difficulty ?? 0.5,
+                Target_IT_Literacy: body.literacy ?? 0.5,
                 mail: body.mail || "",
             },
             query: body.context || "特になし",
