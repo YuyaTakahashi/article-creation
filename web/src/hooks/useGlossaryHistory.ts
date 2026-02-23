@@ -13,16 +13,16 @@ export function useGlossaryHistory() {
     const [mail, , mailMounted] = useLocalStorage("ux_glossary_user_mail", "");
     const [loading, setLoading] = useState(!globalHistoryCache);
 
-    const fetchHistory = useCallback(async (force = false) => {
+    const fetchHistory = useCallback(async (force = false, isPolling = false) => {
         const now = Date.now();
         if (!force && globalHistoryCache && (now - lastFetchTime < CACHE_TTL)) {
             setHistory(globalHistoryCache);
-            setLoading(false);
+            if (!isPolling) setLoading(false);
             return;
         }
 
         try {
-            setLoading(true);
+            if (!isPolling) setLoading(true);
             const res = await fetch(`/api/history`);
             if (res.ok) {
                 const json = await res.json();
@@ -34,7 +34,7 @@ export function useGlossaryHistory() {
         } catch (error) {
             console.error("Failed to fetch history:", error);
         } finally {
-            setLoading(false);
+            if (!isPolling) setLoading(false);
         }
     }, [mail, mailMounted]);
 
@@ -111,6 +111,6 @@ export function useGlossaryHistory() {
         updateTerm,
         deleteTerm,
         isMounted,
-        refetch: () => fetchHistory(true)
+        refetch: (isPolling = false) => fetchHistory(true, isPolling)
     };
 }

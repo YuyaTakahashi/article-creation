@@ -23,7 +23,7 @@ export default function HistoryPage() {
         if (!hasPending) return;
 
         const intervalId = setInterval(() => {
-            refetch();
+            refetch(true); // Pass true to indicate silent polling
         }, 10000);
 
         return () => clearInterval(intervalId);
