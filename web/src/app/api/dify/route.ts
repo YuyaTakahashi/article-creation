@@ -15,6 +15,7 @@ export async function POST(request: Request) {
                 Target_Difficulty: body.difficulty ?? 0.5,
                 Target_IT_Literacy: body.literacy ?? 0.5,
                 mail: body.mail || "",
+                Target_Task_ID: body.taskId || "",
             },
             query: body.context || "特になし",
             response_mode: "streaming", // Enable streaming

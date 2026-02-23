@@ -8,156 +8,26 @@ import { useGlossaryHistory } from "@/hooks/useGlossaryHistory";
 import { Loader2, AlertTriangle, FileText, ArrowRight, Trash2, MoreVertical, ExternalLink, Lock, XCircle, CheckCircle2 } from "lucide-react";
 
 export default function HistoryPage() {
-    const { history, updateTerm, deleteTerm, isMounted, loading } = useGlossaryHistory();
+    const { history, updateTerm, deleteTerm, isMounted, loading, refetch } = useGlossaryHistory();
     const router = useRouter();
     const [mail] = useLocalStorage("ux_glossary_user_mail", "");
-    const processingRef = useRef<Set<string>>(new Set());
-    const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
     const menuRef = useRef<HTMLDivElement>(null);
 
     const [isDeleting, setIsDeleting] = useState<string | null>(null);
     const [activeMenu, setActiveMenu] = useState<string | null>(null);
 
-    // Background worker to process pending terms
+    // Poll for updates every 10 seconds if there are pending tasks
     useEffect(() => {
         if (!isMounted) return;
+        const hasPending = history.some(t => t.status === "pending");
+        if (!hasPending) return;
 
-        const processPendingTasks = async () => {
-            const pendingTasks = history.filter((t) => t.status === "pending");
+        const intervalId = setInterval(() => {
+            refetch();
+        }, 10000);
 
-            for (const task of pendingTasks) {
-                // Determine immediately if we should process
-                if (processingRef.current.has(task.id)) continue;
-
-                // Mark as processing synchronously before any await
-                processingRef.current.add(task.id);
-
-                const controller = new AbortController();
-                abortControllersRef.current.set(task.id, controller);
-
-                try {
-                    const res = await fetch("/api/dify", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        signal: controller.signal,
-                        body: JSON.stringify({
-                            topic: task.topic,
-                            mail: task.mail,
-                            difficulty: task.difficulty,
-                            literacy: task.literacy,
-                            context: task.context,
-                        }),
-                    });
-
-                    if (!res.ok) {
-                        throw new Error(`Server responded with ${res.status}`);
-                    }
-                    if (!res.body) {
-                        throw new Error("No response body streamed from server");
-                    }
-
-                    const reader = res.body.getReader();
-                    const decoder = new TextDecoder("utf-8");
-                    let fullAnswer = "";
-                    let buffer = "";
-
-                    // Define expected total nodes for progress calculation
-                    const TOTAL_EXPECTED_NODES = 25;
-                    let completedNodesCount = 0;
-
-                    // Process the Streaming chunks
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-
-                        buffer += decoder.decode(value, { stream: true });
-                        const lines = buffer.split("\n");
-
-                        // Keep incomplete chunk in the buffer for the next iteration
-                        buffer = lines.pop() || "";
-
-                        for (const line of lines) {
-                            if (line.startsWith("data: ")) {
-                                try {
-                                    const dataStr = line.slice(6).trim();
-                                    if (!dataStr) continue;
-
-                                    const data = JSON.parse(dataStr);
-
-                                    // Handle Dify Events
-                                    if (data.event === "node_started") {
-                                        // Update current workflow node (e.g., "Information Gathering", "Article Writing")
-                                        updateTerm(task.id, { currentNode: data.data.title });
-                                    } else if (data.event === "node_finished") {
-                                        completedNodesCount++;
-                                        const calculatedProgress = Math.min(Math.round((completedNodesCount / TOTAL_EXPECTED_NODES) * 100), 99);
-                                        updateTerm(task.id, {
-                                            currentNode: `完了: ${data.data.title}`,
-                                            completedNodes: completedNodesCount,
-                                            progress: calculatedProgress
-                                        });
-                                    } else if (data.event === "message" || data.event === "agent_message" || data.event === "text_chunk") {
-                                        if (data.answer) {
-                                            fullAnswer += data.answer;
-                                        }
-                                    } else if (data.event === "workflow_finished" || data.event === "message_end") {
-                                        // Finished completely
-                                    }
-                                } catch (e) {
-                                    // Ignore JSON parse errors for incomplete event chunks
-                                }
-                            }
-                        }
-                    }
-
-                    // Generate final WP Link if present in the accumulated answer
-                    let wpLink = undefined;
-                    // Specifically target the WordPress domain and ensure we capture the whole edit URL, avoiding trailing punctuation
-                    const urlMatch = fullAnswer.match(/https?:\/\/uxdaystokyo\.com\/articles\/wp-admin\/post\.php\?[^\s)\]">]+/);
-                    if (urlMatch) {
-                        wpLink = urlMatch[0];
-                    }
-
-                    updateTerm(task.id, {
-                        status: "completed",
-                        difyResponse: fullAnswer,
-                        wpLink: wpLink,
-                        currentNode: "すべての処理が完了しました",
-                        progress: 100,
-                    });
-
-                } catch (error) {
-                    if (error instanceof Error && error.name === 'AbortError') {
-                        console.log(`Generation for task ${task.id} was cancelled.`);
-                        return; // Exit if aborted
-                    }
-
-                    console.error("Background worker error:", error);
-                    updateTerm(task.id, {
-                        status: "error",
-                        errorMessage: error instanceof Error ? error.message : "Unknown error",
-                    });
-                } finally {
-                    processingRef.current.delete(task.id);
-                    abortControllersRef.current.delete(task.id);
-                }
-            }
-        };
-
-        processPendingTasks();
-
-        // Cleanup function to abort requests if component unmounts
-        return () => {
-            // Uncomment the following lines if we want to cancel generation on unmount
-            // Currently we want background processing to continue if possible, 
-            // but Next.js router transitions usually keep the state alive anyway unless it's a hard nav.
-            /*
-            abortControllersRef.current.forEach(controller => controller.abort());
-            abortControllersRef.current.clear();
-            processingRef.current.clear();
-            */
-        };
-    }, [history, isMounted, updateTerm]);
+        return () => clearInterval(intervalId);
+    }, [isMounted, history, refetch]);
 
     // Handle click away for dropdown menu
     useEffect(() => {
@@ -234,13 +104,8 @@ export default function HistoryPage() {
     const handleCancel = (id: string) => {
         if (!confirm("作成処理を中止し、この履歴を削除しますか？")) return;
 
-        // Abort the fetch request if it's running
-        const controller = abortControllersRef.current.get(id);
-        if (controller) {
-            controller.abort();
-            abortControllersRef.current.delete(id);
-        }
-        processingRef.current.delete(id);
+        // Note: Actual Dify server-side process might still continue, 
+        // but we delete the tracking from our DB immediately.
 
         // Delete the item completely from local state
         deleteTerm(id);
@@ -311,19 +176,7 @@ export default function HistoryPage() {
                                         </div>
                                         <div className="flex flex-wrap items-center gap-2 md:gap-3 text-[10px] md:text-xs text-[var(--foreground)]/50">
                                             <span>{new Date(Number(item.createdAt)).toLocaleDateString("ja-JP")}</span>
-                                            {item.status === "pending" && item.currentNode && (
-                                                <>
-                                                    <span className="hidden md:inline">•</span>
-                                                    <span className="flex items-center gap-2 text-[var(--color-primary)] font-medium bg-[var(--color-primary)]/10 px-2 py-0.5 rounded-full animate-pulse">
-                                                        <span>{item.currentNode}</span>
-                                                        {item.progress !== undefined && (
-                                                            <span className="bg-white/50 dark:bg-black/20 text-[var(--color-primary)] px-1 py-0.5 rounded text-[10px] font-bold">
-                                                                {item.progress}%
-                                                            </span>
-                                                        )}
-                                                    </span>
-                                                </>
-                                            )}
+                                            <span>{new Date(Number(item.createdAt)).toLocaleDateString("ja-JP")}</span>
                                         </div>
                                     </div>
 

@@ -38,6 +38,21 @@ export default function CreateTermPage() {
 
     try {
       await addTerm(newTerm);
+
+      // Fire-and-forget: Trigger Dify workflow in the background
+      fetch("/api/dify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          taskId: newTerm.id,
+          topic: newTerm.topic,
+          mail: newTerm.mail,
+          difficulty: newTerm.difficulty,
+          literacy: newTerm.literacy,
+          context: newTerm.context,
+        }),
+      }).catch(console.error);
+
       router.push("/history");
     } catch (error) {
       console.error("Failed to add term", error);
