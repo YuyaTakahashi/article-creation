@@ -177,48 +177,69 @@ function handlePost(data, siteUrl, auth, postType) {
     return createResponse(400, "Missing title or content");
   }
 
-  // 画像処理（ここは変更なし）
+  // 画像・アイキャッチ処理
   let featuredMediaId = 0;
   if (data.imageUrl) {
-    // ... (画像処理のコードはそのまま) ...
-    // 長くなるので省略しますが、既存の画像処理ロジックをそのまま維持してください
-    // もし不安なら、前の「完全版」コードのこの部分をコピペしてください
-    
-    // ↓↓↓ ここだけ簡易的に書きます（実際は前のコードを使ってください）
+    log(`[handlePost] Processing imageUrl: ${data.imageUrl}`);
     let fileName = data.fileName || 'image.jpg';
-    const uploadResult = uploadImageToWordPress(data.imageUrl, fileName, siteUrl, auth);
-    if (uploadResult && uploadResult.id) featuredMediaId = uploadResult.id;
+    // 既存の uploadImageToWordPress を使用
+    try {
+      // caption も渡せるように修正（もしあれば）
+      const uploadResult = uploadImageToWordPress(data.imageUrl, fileName, siteUrl, auth, data.title);
+      if (typeof uploadResult === 'number') {
+        featuredMediaId = uploadResult;
+      } else if (uploadResult && uploadResult.id) {
+        featuredMediaId = uploadResult.id;
+      }
+      log(`[handlePost] Media Upload Result ID: ${featuredMediaId}`);
+    } catch (err) {
+      log(`[handlePost] Image Upload Error: ${err.toString()}`);
+    }
   }
 
-  // ★★★ ここが修正ポイント！ ★★★
-  // data.content をそのまま渡さず、convertMarkdownToHtml() に通します
+  // Markdown -> HTML 変換 (既存の関数を使用)
   const htmlContent = convertMarkdownToHtml(data.content);
 
   const payload = {
     title: data.title,
-    content: htmlContent, // 変換後のHTMLを入れる
+    content: htmlContent,
     status: 'draft',
     slug: data.slug || '',
-    excerpt: data.excerpt || '',  // ★★★ この1行を追加！ ★★★
+    excerpt: data.excerpt || '',
     featured_media: featuredMediaId
   };
 
-
+  // カテゴリIDのパース (極めて堅牢に)
   if (data.categoryIds) {
-    let ids = Array.isArray(data.categoryIds) ? data.categoryIds : [data.categoryIds];
+    log(`[handlePost] raw categoryIds input: ${JSON.stringify(data.categoryIds)}`);
     
-    payload.categories = ids.map(id => {
-      // If it's a number-like string or number, parse it.
-      // Dify might send "22" or " 22 " or even just [22].
-      if (typeof id === 'string') {
-        // Just extract all digits, join them. If "category is 22", becomes 22.
-        const matches = id.match(/\d+/g);
-        if (matches && matches.length > 0) {
-           return parseInt(matches.join(''), 10);
+    let allIds = [];
+    // どんな形式(Array, String)で来ても配列にして処理
+    let initialList = Array.isArray(data.categoryIds) ? data.categoryIds : [data.categoryIds];
+
+    initialList.forEach(item => {
+      if (!item) return;
+
+      if (typeof item === 'number') {
+        allIds.push(item);
+      } else if (typeof item === 'string') {
+        // "369, 370" や "[369]" などの形式を数字の配列に変換
+        const matches = item.match(/\d+/g);
+        if (matches) {
+          matches.forEach(m => allIds.push(parseInt(m, 10)));
         }
+      } else if (Array.isArray(item)) {
+        // 入れ子（[[369]]）対策
+        item.forEach(subItem => {
+          const val = parseInt(subItem, 10);
+          if (!isNaN(val)) allIds.push(val);
+        });
       }
-      return parseInt(id, 10);
-    }).filter(id => !isNaN(id));
+    });
+
+    // 重複排除と数値チェック
+    payload.categories = allIds.filter((v, i, a) => a.indexOf(v) === i && !isNaN(v));
+    log(`[handlePost] Final parsed categories for WP: ${JSON.stringify(payload.categories)}`);
   }
 
   const endpoint = `${siteUrl}/wp-json/wp/v2/${postType}`;
@@ -480,75 +501,7 @@ function testBatchSearch() {
  * @param {string} auth 認証ヘッダー
  * @param {string} caption キャプション・代替テキスト（新規追加）
  */
-function uploadImageToWordPress(imageUrl, fileName, siteUrl, auth, caption) {
-  if (!imageUrl) return null;
 
-  try {
-    // 1. 画像データをWebからダウンロード
-    const downloadOptions = {
-      'muteHttpExceptions': true,
-      'headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      }
-    };
-
-    const imageResponse = UrlFetchApp.fetch(imageUrl, downloadOptions);
-    if (imageResponse.getResponseCode() !== 200) {
-      console.log(`画像のダウンロード失敗 (${imageResponse.getResponseCode()}): ${imageUrl}`);
-      return null;
-    }
-    
-    const blob = imageResponse.getBlob().setName(fileName);
-
-    // 2. WordPressへアップロード
-    const endpoint = `${siteUrl}/wp-json/wp/v2/media`;
-    const uploadOptions = {
-      'method': 'post',
-      'headers': {
-        'Authorization': auth,
-        'Content-Disposition': `attachment; filename="${fileName}"`,
-      },
-      'contentType': blob.getContentType(),
-      'payload': blob,
-      'muteHttpExceptions': true
-    };
-
-    const uploadResponse = UrlFetchApp.fetch(endpoint, uploadOptions);
-    const result = JSON.parse(uploadResponse.getContentText());
-
-    if (uploadResponse.getResponseCode() === 201) {
-      const mediaId = result.id;
-
-      // 3. ★新規追加：アップロードした画像にキャプションとAltテキストを設定する
-      if (caption) {
-        const updateEndpoint = `${endpoint}/${mediaId}`;
-        const updateOptions = {
-          'method': 'post',
-          'headers': {
-            'Authorization': auth,
-            'Content-Type': 'application/json'
-          },
-          'payload': JSON.stringify({
-            'caption': caption,   // キャプション
-            'alt_text': caption,  // 代替テキスト (Alt)
-            'description': caption, // 説明
-            'title': caption      // タイトル
-          }),
-          'muteHttpExceptions': true
-        };
-        UrlFetchApp.fetch(updateEndpoint, updateOptions);
-      }
-
-      return mediaId;
-    } else {
-      console.log("WordPressへのアップロード失敗: " + result.message);
-      return null;
-    }
-  } catch (e) {
-    console.log("画像処理エラー: " + e.toString());
-    return null;
-  }
-}
 
 // ==========================================
 // 0. グローバル変数 & ログ収集用関数
@@ -578,7 +531,7 @@ function createResponse(statusCode, message, data) {
 // ==========================================
 // D. 画像アップロード機能 (完全版・URL返却対応)
 // ==========================================
-function uploadImageToWordPress(imageUrl, fileName, siteUrl, auth) {
+function uploadImageToWordPress(imageUrl, fileName, siteUrl, auth, caption) {
   if (!imageUrl) {
     log("Error: imageUrl is empty");
     return null;
@@ -587,13 +540,13 @@ function uploadImageToWordPress(imageUrl, fileName, siteUrl, auth) {
   log(`[Start] Upload Image process.`);
   log(`Target URL: ${imageUrl}`);
   log(`File Name: ${fileName}`);
+  if (caption) log(`Caption: ${caption}`);
 
   try {
     // 1. 画像データをWebからダウンロード
     const downloadOptions = {
       'muteHttpExceptions': true,
       'headers': {
-        // User-Agent偽装 (403エラー回避)
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       }
     };
@@ -604,25 +557,21 @@ function uploadImageToWordPress(imageUrl, fileName, siteUrl, auth) {
     log(`Image Fetch Response Code: ${responseCode}`);
 
     if (responseCode !== 200) {
-      const errorBody = imageResponse.getContentText().substring(0, 200);
-      log(`Failed to fetch image. Server returned: ${errorBody}`);
+      log(`Failed to fetch image. Status: ${responseCode}`);
       return null;
     }
     
     const blob = imageResponse.getBlob().setName(fileName);
-    const blobType = blob.getContentType();
     
     // 2. WordPressへアップロード
     const endpoint = `${siteUrl}/wp-json/wp/v2/media`;
-    log(`Uploading to WordPress Endpoint: ${endpoint}`);
-
     const uploadOptions = {
       'method': 'post',
       'headers': {
         'Authorization': auth,
         'Content-Disposition': `attachment; filename="${fileName}"`,
       },
-      'contentType': blobType,
+      'contentType': blob.getContentType(),
       'payload': blob,
       'muteHttpExceptions': true
     };
@@ -635,16 +584,38 @@ function uploadImageToWordPress(imageUrl, fileName, siteUrl, auth) {
 
     if (uploadCode === 201) {
       const result = JSON.parse(resultText);
-      log(`Upload Success! Media ID: ${result.id}`);
+      const mediaId = result.id;
+      log(`Upload Success! Media ID: ${mediaId}`);
       
-      // ★ここが重要：IDだけでなく「画像のURL」もセットで返す
+      // 3. キャプション設定
+      if (caption) {
+        log("Updating media caption/alt text...");
+        const updateEndpoint = `${endpoint}/${mediaId}`;
+        const updateOptions = {
+          'method': 'post',
+          'headers': {
+            'Authorization': auth,
+            'Content-Type': 'application/json'
+          },
+          'payload': JSON.stringify({
+            'caption': caption,
+            'alt_text': caption,
+            'description': caption,
+            'title': caption
+          }),
+          'muteHttpExceptions': true
+        };
+        UrlFetchApp.fetch(updateEndpoint, updateOptions);
+      }
+
+      // IDとURLの両方を返す（互換性のため）
       return {
-        id: result.id,
-        url: result.source_url  // WordPress上の画像URL
+        id: mediaId,
+        url: result.source_url
       };
       
     } else {
-      log(`WordPress Upload Failed. Message: ${resultText.substring(0, 300)}`);
+      log(`WordPress Upload Failed: ${resultText}`);
       return null;
     }
   } catch (e) {
@@ -676,22 +647,15 @@ function handleMediaUploadOnly(data, siteUrl, auth) {
     const ext = extMatch ? extMatch[0] : '.jpg';
     fileName = 'wp-upload-' + new Date().getTime() + ext;
   }
-
-  // 4. WordPressへアップロード実行
-  // ※uploadImageToWordPress関数の引数の最後に caption を追加しています
-  const mediaId = uploadImageToWordPress(data.imageUrl, fileName, siteUrl, auth, caption);
-
-  // 5. 結果をDifyに返す
-  if (mediaId) {
-    return createResponse(200, "Image Upload Success", {
-      media_id: mediaId,
-      // 本来のURLが必要な場合や確認用にIDを返します
-      original_url: data.imageUrl,
-      applied_caption: caption
-    });
+  // 4. 画像アップロード & キャプション設定実行
+  const result = uploadImageToWordPress(data.imageUrl, fileName, siteUrl, auth, caption);
+  
+  if (result && result.id) {
+    log("Upload process completed successfully.");
+    return createResponse(200, "success", result);
   } else {
-    // 失敗した場合
-    return createResponse(500, "Image Upload Failed. Check debug_log field.");
+    log("Upload process failed.");
+    return createResponse(500, "Upload failed");
   }
 }
 
