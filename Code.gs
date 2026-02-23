@@ -285,7 +285,8 @@ function handlePost(data, siteUrl, auth, postType) {
             updates: {
               status: "completed",
               progress: 100,
-              wpLink: result.editUrl
+              wpLink: result.editUrl,
+              difyResponse: data.content
             }
           });
         } catch (updateErr) {
